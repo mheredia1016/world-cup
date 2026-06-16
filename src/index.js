@@ -83,10 +83,10 @@ if (runNow) {
 }
 
 // Runs every 5 minutes
-console.log('World Cup scanner running every 5 minutes.');
+console.log('World Cup scanner running every 15 minutes.');
 
 cron.schedule(
-  '*/5 * * * *',
+  '*/15 * * * *',
   scanWorldCup,
   {
     timezone: config.timezone
