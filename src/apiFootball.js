@@ -12,21 +12,42 @@ const api = axios.create({
 export async function getFixturesByDate(date) {
   const { data } = await api.get('/fixtures', {
     params: {
-      league: config.leagueId,
-      season: config.season,
       date,
       timezone: config.timezone
     }
   });
 
-  return data.response || [];
+  const all = data.response || [];
+
+  console.log('All fixtures by date:', {
+    date,
+    total: all.length,
+    errors: data.errors
+  });
+
+  const worldCup = all.filter(x => {
+    const leagueName = String(x.league?.name || '').toLowerCase();
+    const country = String(x.league?.country || '').toLowerCase();
+
+    return (
+      leagueName.includes('world cup') ||
+      leagueName.includes('fifa') ||
+      country.includes('world')
+    );
+  });
+
+  console.log('World Cup filtered:', {
+    date,
+    results: worldCup.length,
+    leagues: [...new Set(worldCup.map(x => `${x.league.id} - ${x.league.name}`))]
+  });
+
+  return worldCup;
 }
 
 export async function getFixtureLineups(fixtureId) {
   const { data } = await api.get('/fixtures/lineups', {
-    params: {
-      fixture: fixtureId
-    }
+    params: { fixture: fixtureId }
   });
 
   return data.response || [];
@@ -34,9 +55,7 @@ export async function getFixtureLineups(fixtureId) {
 
 export async function getTeamSquad(teamId) {
   const { data } = await api.get('/players/squads', {
-    params: {
-      team: teamId
-    }
+    params: { team: teamId }
   });
 
   return data.response?.[0]?.players || [];
