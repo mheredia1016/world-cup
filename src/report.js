@@ -1,43 +1,112 @@
-function groupByLabel(plays) {
-  return plays.reduce((acc, play) => {
-    acc[play.label] ||= [];
-    acc[play.label].push(play);
-    return acc;
-  }, {});
-}
-
 export function buildPregameReport(matches) {
   if (!matches.length) {
-    return '🌎 **World Cup Pregame Plays**\n\nNo World Cup matches found.';
+    return '🌎 **WORLD CUP MATCH HUB**\n\nNo matches found.';
   }
 
-  let out = '🌎 **World Cup Pregame Plays**\n';
-  out += '_Data-driven watch list. Not betting odds._\n\n';
+  let out = '🌎 **WORLD CUP MATCH HUB**\n\n';
 
   for (const match of matches) {
-    out += '━━━━━━━━━━━━━━\n';
-    out += `**${match.name}**\n`;
-    out += `Kickoff: ${match.kickoff}\n`;
-    out += `Lineups: ${match.lineupStatus}\n\n`;
+    out += '━━━━━━━━━━━━━━━━━━━━\n';
+    out += `🏟️ **${match.name}**\n`;
+    out += `🕒 ${match.kickoff}\n\n`;
 
-    if (!match.plays.length) {
-      out += '_No qualified plays found._\n\n';
+    const plays = match.plays || [];
+
+    if (!plays.length) {
+      out += '_No props available._\n\n';
       continue;
     }
 
-    const grouped = groupByLabel(match.plays);
+    const goals = plays.filter(p =>
+      String(p.market).toLowerCase().includes('goal')
+    );
 
-    for (const [label, plays] of Object.entries(grouped)) {
-      out += `${label}\n`;
+    const sots = plays.filter(p =>
+      String(p.market).toLowerCase().includes('target')
+    );
 
-      for (const play of plays.slice(0, 3)) {
-        out += `• **${play.player}** — ${play.score} score\n`;
-        out += `  ${play.reasons.join(' • ')}\n`;
+    const shots = plays.filter(p =>
+      String(p.market).toLowerCase().includes('shot')
+    );
+
+    const saves = plays.filter(p =>
+      String(p.market).toLowerCase().includes('save')
+    );
+
+    const singles = [];
+
+    if (sots[0]) singles.push(sots[0]);
+    if (shots[0]) singles.push(shots[0]);
+    if (goals[0]) singles.push(goals[0]);
+
+    out += '🎯 **TOP SINGLES**\n';
+
+    for (const play of singles.slice(0, 3)) {
+      out += `• ${play.player}\n`;
+      out += `  ${play.market}\n`;
+
+      if (play.line) {
+        out += `  Line: ${play.line}\n`;
+      }
+
+      if (play.price) {
+        out += `  Odds: ${play.price}\n`;
+      }
+
+      if (play.sportsbook) {
+        out += `  Book: ${play.sportsbook}\n`;
       }
 
       out += '\n';
     }
+
+    const safeParlay = [];
+
+    if (sots[0]) safeParlay.push(sots[0]);
+    if (shots[0]) safeParlay.push(shots[0]);
+    if (saves[0]) safeParlay.push(saves[0]);
+
+    if (safeParlay.length >= 2) {
+      out += '🔥 **SAFE PARLAY**\n';
+
+      for (const leg of safeParlay) {
+        out += `✅ ${leg.player} - ${leg.market}\n`;
+      }
+
+      out += '\n';
+    }
+
+    const aggressiveParlay = [];
+
+    if (goals[0]) aggressiveParlay.push(goals[0]);
+    if (sots[0]) aggressiveParlay.push(sots[0]);
+
+    if (shots.length > 1) {
+      aggressiveParlay.push(shots[1]);
+    } else if (shots[0]) {
+      aggressiveParlay.push(shots[0]);
+    }
+
+    if (aggressiveParlay.length >= 2) {
+      out += '🚀 **AGGRESSIVE PARLAY**\n';
+
+      for (const leg of aggressiveParlay) {
+        out += `✅ ${leg.player} - ${leg.market}\n`;
+      }
+
+      out += '\n';
+    }
+
+    const bestLink =
+      singles.find(x => x.deeplink) ||
+      safeParlay.find(x => x.deeplink) ||
+      aggressiveParlay.find(x => x.deeplink);
+
+    if (bestLink?.deeplink) {
+      out += '🔗 **BEST LINK**\n';
+      out += `${bestLink.deeplink}\n\n`;
+    }
   }
 
-  return out.trim();
+  return out;
 }
