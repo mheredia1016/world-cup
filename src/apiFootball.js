@@ -52,25 +52,26 @@ export async function getFixturesByDate(date) {
 
   console.log('All fixtures by date:', {
     date,
-    total: all.length,
-    errors: data.errors
+    total: all.length
   });
 
-  const worldCup = all.filter(x => {
-    const leagueName = String(x.league?.name || '').toLowerCase();
-    const country = String(x.league?.country || '').toLowerCase();
+  // ONLY WORLD CUP MATCHES
+  const worldCup = all.filter(match => {
+    const leagueId = Number(match.league?.id);
+    const leagueName = String(match.league?.name || '').toLowerCase();
 
     return (
-      leagueName.includes('world cup') ||
-      leagueName.includes('fifa') ||
-      country.includes('world')
+      leagueId === 1 ||
+      leagueName === 'world cup'
     );
   });
 
-  console.log('World Cup filtered:', {
+  console.log('World Cup matches found:', {
     date,
-    results: worldCup.length,
-    leagues: [...new Set(worldCup.map(x => `${x.league.id} - ${x.league.name}`))]
+    count: worldCup.length,
+    matches: worldCup.map(
+      m => `${m.teams.home.name} vs ${m.teams.away.name}`
+    )
   });
 
   return worldCup;
