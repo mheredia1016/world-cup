@@ -1,48 +1,80 @@
-const allowedBooks = String(process.env.BOOKMAKER_IDS || 'fanduel,draftkings,hardrock,bet365')
-  .split(',')
-  .map(x => x.trim().toLowerCase());
+import {
+  getWorldCupEvents,
+  extractPlayerPropPlays,
+  getMatchName
+} from './sportsGameOdds.js';
 
-function isAllowedBook(book) {
-  const b = String(book || '').toLowerCase();
+function parseOdds(value) {
+  if (value === undefined || value === null || value === '') return 0;
+  const n = Number(String(value).replace('+', ''));
+  return Number.isFinite(n) ? n : 0;
+}
 
-  return allowedBooks.some(allowed =>
-    b === allowed ||
-    b.includes(allowed) ||
-    (allowed === 'draftkings' && b.includes('draft')) ||
-    (allowed === 'fanduel' && b.includes('fan')) ||
-    (allowed === 'hardrock' && b.includes('hard')) ||
-    (allowed === 'bet365' && b.includes('365'))
+function hasConfirmedLineups(event) {
+  return Boolean(
+    event.lineupsConfirmed ||
+    event.confirmedLineups ||
+    event.playersConfirmed ||
+    event.status?.lineupsConfirmed ||
+    event.status?.confirmedLineups ||
+    event.lineups?.confirmed ||
+    event.lineups?.home ||
+    event.lineups?.away
   );
 }
 
-function bestBook(odd) {
-  const books = odd.byBookmaker || {};
-  let best = null;
+function playRank(play) {
+  const typeRank = {
+    sot: 1,
+    shots: 2,
+    goal: 3,
+    assist: 4,
+    saves: 5,
+    cards: 6
+  };
 
-  for (const [book, row] of Object.entries(books)) {
-    if (book === 'consensus') continue;
-    if (!isAllowedBook(book)) continue;
-    if (!row?.available) continue;
+  const odds = parseOdds(play.price);
+  const oddsPenalty = odds > 900 ? 50 : 0;
 
-    const odds = row.odds || row.price || row.americanOdds;
-    const parsed = parseAmericanOdds(odds);
-    if (parsed === null) continue;
+  return (typeRank[play.type] || 99) + oddsPenalty;
+}
 
-    const candidate = {
-      book,
-      odds,
-      deeplink: row.deeplink || row.deepLink || row.link || ''
-    };
+export async function buildPregameMatches() {
+  const events = await getWorldCupEvents();
 
-    if (!best) {
-      best = candidate;
-      continue;
-    }
+  return events
+    .map(event => {
+      const matchName = getMatchName(event);
 
-    if (parseAmericanOdds(candidate.odds) > parseAmericanOdds(best.odds)) {
-      best = candidate;
-    }
-  }
+      if (
+        process.env.REQUIRE_LINEUPS_CONFIRMED === 'true' &&
+        !hasConfirmedLineups(event)
+      ) {
+        console.log('Skipping, lineups not confirmed:', matchName);
+        return null;
+      }
 
-  return best;
+      const plays = extractPlayerPropPlays(event);
+
+      plays.sort((a, b) => {
+        const rankDiff = playRank(a) - playRank(b);
+        if (rankDiff !== 0) return rankDiff;
+
+        return parseOdds(b.price) - parseOdds(a.price);
+      });
+
+      return {
+        fixtureId: event.eventID || event.id,
+        name: matchName,
+        kickoff:
+          event.status?.startsAt ||
+          event.startsAt ||
+          event.startTime ||
+          event.commenceTime ||
+          'TBD',
+        lineupStatus: 'Confirmed lineups only',
+        plays
+      };
+    })
+    .filter(Boolean);
 }
