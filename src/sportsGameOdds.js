@@ -9,8 +9,14 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function isoHoursFromNow(hours) {
+  const d = new Date();
+  d.setHours(d.getHours() + hours);
+  return d.toISOString();
+}
+
 async function getJson(path, params = {}) {
-  await sleep(750);
+  await sleep(500);
 
   const { data } = await axios.get(`${API_BASE}${path}`, {
     headers: {
@@ -20,103 +26,171 @@ async function getJson(path, params = {}) {
     params
   });
 
+  if (!data.success) {
+    throw data;
+  }
+
   return data;
 }
 
-async function hydrateEvent(eventID) {
-  const data = await getJson('/events', {
-    eventID,
-    oddsAvailable: 'true',
-    includeAltLines: 'true',
-    limit: 1
-  });
+function teamName(team) {
+  return (
+    team?.names?.long ||
+    team?.names?.medium ||
+    team?.names?.short ||
+    team?.teamID ||
+    ''
+  );
+}
 
-  const events = data.data || data.events || [];
-  return events[0] || null;
+function getMatchName(event) {
+  const away = teamName(event.teams?.away);
+  const home = teamName(event.teams?.home);
+
+  if (away && home) return `${away} vs ${home}`;
+
+  return event.eventID;
+}
+
+function getKickoff(event) {
+  return event.status?.startsAt || event.startsAt || 'TBD';
+}
+
+function oddsArray(event) {
+  if (!event.odds || typeof event.odds !== 'object') return [];
+  return Object.values(event.odds);
+}
+
+function playerNameFromOdd(event, odd) {
+  const playerID = odd.playerID || odd.statEntityID;
+  const player = event.players?.[playerID];
+
+  return (
+    player?.name ||
+    `${player?.firstName || ''} ${player?.lastName || ''}`.trim() ||
+    parsePlayerFromMarket(odd.marketName) ||
+    playerID
+  );
+}
+
+function parsePlayerFromMarket(marketName = '') {
+  const cleaned = String(marketName)
+    .replace(' To Record First Goal Yes/No (Full Match)', '')
+    .replace(' To Record Last Goal Yes/No (Full Match)', '')
+    .replace(' Any Goals + Assists Yes/No (Full Match)', '')
+    .replace(' Anytime Goalscorer Yes/No (Full Match)', '')
+    .replace(' Shots On Target Over/Under (Full Match)', '')
+    .replace(' Shots Over/Under (Full Match)', '')
+    .replace(' Assists Over/Under (Full Match)', '')
+    .replace(' Cards Over/Under (Full Match)', '')
+    .trim();
+
+  return cleaned || '';
+}
+
+function isPlayerProp(odd) {
+  if (!odd.playerID) return false;
+
+  const text = [
+    odd.oddID,
+    odd.marketName,
+    odd.statID,
+    odd.betTypeID,
+    odd.sideID
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return (
+    text.includes('goal') ||
+    text.includes('score') ||
+    text.includes('shot') ||
+    text.includes('assist') ||
+    text.includes('card') ||
+    text.includes('save')
+  );
+}
+
+function bestBook(odd) {
+  const books = odd.byBookmaker || {};
+  let best = null;
+
+  for (const [book, row] of Object.entries(books)) {
+    if (!row?.available || !row.odds) continue;
+
+    if (!best) {
+      best = { book, odds: row.odds, deeplink: row.deeplink || '' };
+      continue;
+    }
+
+    const current = Number(String(row.odds).replace('+', ''));
+    const previous = Number(String(best.odds).replace('+', ''));
+
+    if (Number.isFinite(current) && Number.isFinite(previous) && current > previous) {
+      best = { book, odds: row.odds, deeplink: row.deeplink || '' };
+    }
+  }
+
+  return best;
 }
 
 export async function getWorldCupEvents() {
   const data = await getJson('/events', {
     leagueID,
-    oddsAvailable: 'true',
-    finalized: 'false',
+    type: 'match',
+    oddsAvailable: true,
+    finalized: false,
+    started: false,
+    startsAfter: isoHoursFromNow(-3),
+    startsBefore: isoHoursFromNow(36),
+    includeAltLines: true,
     limit: 100
   });
 
-  const rawEvents = data.data || data.events || [];
+  const events = data.data || [];
 
-  console.log('Raw SGO events:', rawEvents.length);
-
-  const hydrated = [];
-
-  for (const event of rawEvents) {
-    const eventID = event.eventID || event.id;
-    if (!eventID) continue;
-
-    const full = await hydrateEvent(eventID);
-    if (!full) continue;
-
-    hydrated.push(full);
-  }
-
-  console.log('Hydrated SGO events:', hydrated.map(e => ({
-    id: e.eventID || e.id,
+  console.log('SGO events found:', events.map(e => ({
+    eventID: e.eventID,
     leagueID: e.leagueID,
-    name: e.name,
-    home: e.homeTeamName,
-    away: e.awayTeamName,
-    start: e.startTime || e.startDate || e.commenceTime,
-    oddsRows: (e.odds || e.markets || e.lines || []).length
+    match: getMatchName(e),
+    startsAt: getKickoff(e),
+    odds: oddsArray(e).length,
+    players: Object.keys(e.players || {}).length
   })));
 
-  return hydrated;
+  return events;
 }
 
 export function extractPlayerPropPlays(event) {
-  const oddsRows = event.odds || event.markets || event.lines || [];
-
   const plays = [];
 
-  for (const row of oddsRows) {
-    const marketText = [
-      row.oddID,
-      row.marketID,
-      row.marketName,
-      row.statID,
-      row.statName,
-      row.name,
-      row.selectionName
-    ].filter(Boolean).join(' ').toLowerCase();
+  for (const odd of oddsArray(event)) {
+    if (!isPlayerProp(odd)) continue;
 
-    const isWanted =
-      marketText.includes('score') ||
-      marketText.includes('goal') ||
-      marketText.includes('shot') ||
-      marketText.includes('assist') ||
-      marketText.includes('card') ||
-      marketText.includes('save');
+    const book = bestBook(odd);
+    if (!book && !odd.bookOdds && !odd.fairOdds) continue;
 
-    if (!isWanted) continue;
-
-    const player =
-      row.playerName ||
-      row.participantName ||
-      row.selectionName ||
-      row.name;
-
+    const player = playerNameFromOdd(event, odd);
     if (!player) continue;
 
     plays.push({
-      eventID: event.eventID || event.id,
-      matchName: event.name || `${event.awayTeamName} vs ${event.homeTeamName}`,
+      eventID: event.eventID,
+      matchName: getMatchName(event),
       player,
-      market: row.marketName || row.statName || row.oddID || 'Player Prop',
-      line: row.line ?? row.points ?? row.handicap ?? '',
-      price: row.price ?? row.odds ?? row.americanOdds ?? '',
-      sportsbook: row.bookmakerName || row.sportsbook || row.bookmakerID || '',
-      raw: row
+      market: odd.marketName || odd.statID || 'Player Prop',
+      line: odd.bookOverUnder || odd.fairOverUnder || odd.bookSpread || odd.fairSpread || '',
+      price: book?.odds || odd.bookOdds || odd.fairOdds || '',
+      sportsbook: book?.book || 'consensus',
+      deeplink: book?.deeplink || '',
+      raw: odd
     });
   }
+
+  console.log('Player props:', {
+    match: getMatchName(event),
+    props: plays.length
+  });
 
   return plays;
 }
