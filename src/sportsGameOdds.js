@@ -1,18 +1,11 @@
 import axios from 'axios';
 
 const API_BASE = 'https://api.sportsgameodds.com/v2';
-
 const apiKey = process.env.SPORTSGAMEODDS_API_KEY;
 const leagueID = process.env.SGO_LEAGUE_ID || 'INTERNATIONAL_SOCCER';
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function isoHoursFromNow(hours) {
-  const d = new Date();
-  d.setHours(d.getHours() + hours);
-  return d.toISOString();
 }
 
 async function getJson(path, params = {}) {
@@ -26,10 +19,7 @@ async function getJson(path, params = {}) {
     params
   });
 
-  if (!data.success) {
-    throw data;
-  }
-
+  if (!data.success) throw data;
   return data;
 }
 
@@ -38,27 +28,70 @@ function teamName(team) {
     team?.names?.long ||
     team?.names?.medium ||
     team?.names?.short ||
+    team?.name ||
+    team?.teamName ||
     team?.teamID ||
     ''
   );
 }
 
-function getMatchName(event) {
+export function getMatchName(event) {
   const away = teamName(event.teams?.away);
   const home = teamName(event.teams?.home);
 
   if (away && home) return `${away} vs ${home}`;
 
-  return event.eventID;
-}
-
-function getKickoff(event) {
-  return event.status?.startsAt || event.startsAt || 'TBD';
+  return (
+    event.activity ||
+    event.name ||
+    event.shortName ||
+    event.eventName ||
+    event.eventID ||
+    'Unknown Match'
+  );
 }
 
 function oddsArray(event) {
   if (!event.odds || typeof event.odds !== 'object') return [];
   return Object.values(event.odds);
+}
+
+function parseAmericanOdds(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(String(value).replace('+', ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+function bestBook(odd) {
+  const books = odd.byBookmaker || {};
+  let best = null;
+
+  for (const [book, row] of Object.entries(books)) {
+    if (book === 'consensus') continue;
+    if (!row?.available) continue;
+
+    const odds = row.odds || row.price || row.americanOdds;
+    const parsed = parseAmericanOdds(odds);
+    if (parsed === null) continue;
+
+    const candidate = {
+      book,
+      odds,
+      deeplink: row.deeplink || row.deepLink || row.link || ''
+    };
+
+    if (!best) {
+      best = candidate;
+      continue;
+    }
+
+    const current = parseAmericanOdds(candidate.odds);
+    const previous = parseAmericanOdds(best.odds);
+
+    if (current > previous) best = candidate;
+  }
+
+  return best;
 }
 
 function playerNameFromOdd(event, odd) {
@@ -68,71 +101,42 @@ function playerNameFromOdd(event, odd) {
   return (
     player?.name ||
     `${player?.firstName || ''} ${player?.lastName || ''}`.trim() ||
-    parsePlayerFromMarket(odd.marketName) ||
-    playerID
+    playerID ||
+    ''
   );
 }
 
-function parsePlayerFromMarket(marketName = '') {
-  const cleaned = String(marketName)
-    .replace(' To Record First Goal Yes/No (Full Match)', '')
-    .replace(' To Record Last Goal Yes/No (Full Match)', '')
-    .replace(' Any Goals + Assists Yes/No (Full Match)', '')
-    .replace(' Anytime Goalscorer Yes/No (Full Match)', '')
-    .replace(' Shots On Target Over/Under (Full Match)', '')
-    .replace(' Shots Over/Under (Full Match)', '')
-    .replace(' Assists Over/Under (Full Match)', '')
-    .replace(' Cards Over/Under (Full Match)', '')
-    .trim();
+function propType(odd) {
+  const text = String(odd.marketName || odd.statID || '').toLowerCase();
 
-  return cleaned || '';
+  if (text.includes('shots on target')) return 'sot';
+  if (text.includes('any shots') || text.includes('shots over/under')) return 'shots';
+  if (text.includes('anytime goalscorer')) return 'goal';
+  if (text.includes('goals over/under')) return 'goal';
+  if (text.includes('assists')) return 'assist';
+  if (text.includes('saves')) return 'saves';
+  if (text.includes('cards')) return 'cards';
+
+  return 'other';
 }
 
-function isPlayerProp(odd) {
-  if (!odd.playerID) return false;
+function isPlayableProp(odd, best) {
+  const type = propType(odd);
+  const market = String(odd.marketName || '').toLowerCase();
+  const odds = parseAmericanOdds(best?.odds);
 
-  const text = [
-    odd.oddID,
-    odd.marketName,
-    odd.statID,
-    odd.betTypeID,
-    odd.sideID
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
+  if (!best) return false;
+  if (odds === null) return false;
 
-  return (
-    text.includes('goal') ||
-    text.includes('score') ||
-    text.includes('shot') ||
-    text.includes('assist') ||
-    text.includes('card') ||
-    text.includes('save')
-  );
-}
+  // Kill crazy junk lines like +6364 / +10000.
+  if (odds > 2000) return false;
 
-function bestBook(odd) {
-  const books = odd.byBookmaker || {};
-  let best = null;
-
-  for (const [book, row] of Object.entries(books)) {
-    if (!row?.available || !row.odds) continue;
-
-    if (!best) {
-      best = { book, odds: row.odds, deeplink: row.deeplink || '' };
-      continue;
-    }
-
-    const current = Number(String(row.odds).replace('+', ''));
-    const previous = Number(String(best.odds).replace('+', ''));
-
-    if (Number.isFinite(current) && Number.isFinite(previous) && current > previous) {
-      best = { book, odds: row.odds, deeplink: row.deeplink || '' };
-    }
+  // Avoid random defender 0.5 goal props.
+  if (type === 'goal' && market.includes('goals over/under') && odds > 900) {
+    return false;
   }
 
-  return best;
+  return ['sot', 'shots', 'goal', 'assist', 'saves', 'cards'].includes(type);
 }
 
 export async function getWorldCupEvents() {
@@ -142,8 +146,6 @@ export async function getWorldCupEvents() {
     oddsAvailable: true,
     finalized: false,
     started: false,
-    startsAfter: isoHoursFromNow(-3),
-    startsBefore: isoHoursFromNow(36),
     includeAltLines: true,
     limit: 100
   });
@@ -152,11 +154,9 @@ export async function getWorldCupEvents() {
 
   console.log('SGO events found:', events.map(e => ({
     eventID: e.eventID,
-    leagueID: e.leagueID,
     match: getMatchName(e),
-    startsAt: getKickoff(e),
-    odds: oddsArray(e).length,
-    players: Object.keys(e.players || {}).length
+    startsAt: e.status?.startsAt,
+    odds: oddsArray(e).length
   })));
 
   return events;
@@ -166,10 +166,10 @@ export function extractPlayerPropPlays(event) {
   const plays = [];
 
   for (const odd of oddsArray(event)) {
-    if (!isPlayerProp(odd)) continue;
+    if (!odd.playerID && !odd.statEntityID) continue;
 
     const book = bestBook(odd);
-    if (!book && !odd.bookOdds && !odd.fairOdds) continue;
+    if (!isPlayableProp(odd, book)) continue;
 
     const player = playerNameFromOdd(event, odd);
     if (!player) continue;
@@ -179,10 +179,11 @@ export function extractPlayerPropPlays(event) {
       matchName: getMatchName(event),
       player,
       market: odd.marketName || odd.statID || 'Player Prop',
+      type: propType(odd),
       line: odd.bookOverUnder || odd.fairOverUnder || odd.bookSpread || odd.fairSpread || '',
-      price: book?.odds || odd.bookOdds || odd.fairOdds || '',
-      sportsbook: book?.book || 'consensus',
-      deeplink: book?.deeplink || '',
+      price: book.odds,
+      sportsbook: book.book,
+      deeplink: book.deeplink || '',
       raw: odd
     });
   }
