@@ -1,11 +1,10 @@
 import {
   getWorldCupEvents,
-  getEventOdds,
   extractPlayerPropPlays
 } from './sportsGameOdds.js';
 import { config } from './config.js';
 
-function groupPlaysForMatch(event, plays) {
+function groupPlaysForMatch(plays) {
   return plays
     .slice(0, config.topPlaysPerMatch || 10)
     .map(play => ({
@@ -22,24 +21,16 @@ function groupPlaysForMatch(event, plays) {
 
 export async function buildPregameMatches() {
   const events = await getWorldCupEvents();
-  const matches = [];
 
-  for (const event of events) {
-    const eventID = event.eventID || event.id;
+  return events.map(event => {
+    const rawPlays = extractPlayerPropPlays(event);
 
-    if (!eventID) continue;
-
-    const oddsRows = await getEventOdds(eventID);
-    const rawPlays = extractPlayerPropPlays(event, oddsRows);
-
-    matches.push({
-      fixtureId: eventID,
+    return {
+      fixtureId: event.eventID || event.id,
       name: event.name || `${event.awayTeamName} vs ${event.homeTeamName}`,
       kickoff: event.startTime || event.startDate || event.commenceTime || 'TBD',
       lineupStatus: 'Using SportsGameOdds player prop markets',
-      plays: groupPlaysForMatch(event, rawPlays)
-    });
-  }
-
-  return matches;
+      plays: groupPlaysForMatch(rawPlays)
+    };
+  });
 }
