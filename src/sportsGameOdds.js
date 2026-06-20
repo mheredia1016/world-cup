@@ -10,7 +10,7 @@ function sleep(ms) {
 }
 
 async function getJson(path, params = {}) {
-  await sleep(500);
+  await sleep(750);
 
   const { data } = await axios.get(`${API_BASE}${path}`, {
     headers: {
@@ -23,35 +23,16 @@ async function getJson(path, params = {}) {
   return data;
 }
 
-const WORLD_CUP_TEAMS = [
-  'argentina', 'australia', 'belgium', 'brazil', 'canada', 'chile',
-  'colombia', 'croatia', 'denmark', 'ecuador', 'england', 'france',
-  'germany', 'ghana', 'iran', 'italy', 'japan', 'mexico', 'morocco',
-  'netherlands', 'poland', 'portugal', 'qatar', 'saudi arabia',
-  'senegal', 'serbia', 'south korea', 'spain', 'switzerland',
-  'tunisia', 'united states', 'usa', 'uruguay', 'wales'
-];
+async function hydrateEvent(eventID) {
+  const data = await getJson('/events', {
+    eventID,
+    oddsAvailable: 'true',
+    includeAltLines: 'true',
+    limit: 1
+  });
 
-function isWorldCupEvent(event) {
-  const text = [
-    event.leagueID,
-    event.leagueName,
-    event.tournament,
-    event.name,
-    event.homeTeamName,
-    event.awayTeamName,
-    event.homeTeamID,
-    event.awayTeamID
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-
-  if (text.includes('world cup') || text.includes('fifa')) return true;
-
-  const matchesTeam = WORLD_CUP_TEAMS.some(team => text.includes(team));
-
-  return matchesTeam;
+  const events = data.data || data.events || [];
+  return events[0] || null;
 }
 
 export async function getWorldCupEvents() {
@@ -59,41 +40,40 @@ export async function getWorldCupEvents() {
     leagueID,
     oddsAvailable: 'true',
     finalized: 'false',
-    includeAltLines: 'true',
     limit: 100
   });
 
-  const events = data.data || data.events || [];
+  const rawEvents = data.data || data.events || [];
 
-  console.log('SportsGameOdds raw events:', events.map(e => ({
+  console.log('Raw SGO events:', rawEvents.length);
+
+  const hydrated = [];
+
+  for (const event of rawEvents) {
+    const eventID = event.eventID || event.id;
+    if (!eventID) continue;
+
+    const full = await hydrateEvent(eventID);
+    if (!full) continue;
+
+    hydrated.push(full);
+  }
+
+  console.log('Hydrated SGO events:', hydrated.map(e => ({
     id: e.eventID || e.id,
     leagueID: e.leagueID,
-    leagueName: e.leagueName,
     name: e.name,
     home: e.homeTeamName,
     away: e.awayTeamName,
-    start: e.startTime || e.startDate || e.commenceTime
+    start: e.startTime || e.startDate || e.commenceTime,
+    oddsRows: (e.odds || e.markets || e.lines || []).length
   })));
 
-  const worldCupEvents = events.filter(isWorldCupEvent);
-
-  console.log('SportsGameOdds filtered events:', {
-    leagueID,
-    total: events.length,
-    filtered: worldCupEvents.length,
-    games: worldCupEvents.map(e => e.name || `${e.awayTeamName} vs ${e.homeTeamName}`)
-  });
-
-  return worldCupEvents;
+  return hydrated;
 }
 
 export function extractPlayerPropPlays(event) {
   const oddsRows = event.odds || event.markets || event.lines || [];
-
-  console.log('Odds rows for event:', {
-    event: event.name || `${event.awayTeamName} vs ${event.homeTeamName}`,
-    rows: oddsRows.length
-  });
 
   const plays = [];
 
