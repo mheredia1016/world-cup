@@ -23,6 +23,15 @@ async function getJson(path, params = {}) {
   return data;
 }
 
+const WORLD_CUP_TEAMS = [
+  'argentina', 'australia', 'belgium', 'brazil', 'canada', 'chile',
+  'colombia', 'croatia', 'denmark', 'ecuador', 'england', 'france',
+  'germany', 'ghana', 'iran', 'italy', 'japan', 'mexico', 'morocco',
+  'netherlands', 'poland', 'portugal', 'qatar', 'saudi arabia',
+  'senegal', 'serbia', 'south korea', 'spain', 'switzerland',
+  'tunisia', 'united states', 'usa', 'uruguay', 'wales'
+];
+
 function isWorldCupEvent(event) {
   const text = [
     event.leagueID,
@@ -30,10 +39,19 @@ function isWorldCupEvent(event) {
     event.tournament,
     event.name,
     event.homeTeamName,
-    event.awayTeamName
-  ].filter(Boolean).join(' ').toLowerCase();
+    event.awayTeamName,
+    event.homeTeamID,
+    event.awayTeamID
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
 
-  return text.includes('world cup') || text.includes('fifa');
+  if (text.includes('world cup') || text.includes('fifa')) return true;
+
+  const matchesTeam = WORLD_CUP_TEAMS.some(team => text.includes(team));
+
+  return matchesTeam;
 }
 
 export async function getWorldCupEvents() {
@@ -41,36 +59,41 @@ export async function getWorldCupEvents() {
     leagueID,
     oddsAvailable: 'true',
     finalized: 'false',
+    includeAltLines: 'true',
     limit: 100
   });
 
   const events = data.data || data.events || [];
+
+  console.log('SportsGameOdds raw events:', events.map(e => ({
+    id: e.eventID || e.id,
+    leagueID: e.leagueID,
+    leagueName: e.leagueName,
+    name: e.name,
+    home: e.homeTeamName,
+    away: e.awayTeamName,
+    start: e.startTime || e.startDate || e.commenceTime
+  })));
+
   const worldCupEvents = events.filter(isWorldCupEvent);
 
-  console.log('SportsGameOdds events:', {
+  console.log('SportsGameOdds filtered events:', {
     leagueID,
     total: events.length,
-    worldCup: worldCupEvents.length,
+    filtered: worldCupEvents.length,
     games: worldCupEvents.map(e => e.name || `${e.awayTeamName} vs ${e.homeTeamName}`)
   });
 
   return worldCupEvents;
 }
 
-export async function getEventOdds(eventID) {
-  const data = await getJson('/events', {
-    eventID,
-    oddsAvailable: 'true',
-    includeAltLines: 'true',
-    limit: 1
-  });
-
-  const events = data.data || data.events || [];
-  return events[0]?.odds || events[0]?.markets || [];
-}
-
 export function extractPlayerPropPlays(event) {
   const oddsRows = event.odds || event.markets || event.lines || [];
+
+  console.log('Odds rows for event:', {
+    event: event.name || `${event.awayTeamName} vs ${event.homeTeamName}`,
+    rows: oddsRows.length
+  });
 
   const plays = [];
 
